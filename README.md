@@ -1,3 +1,6 @@
+# This for is for my personal use only
+
+This fork was created to apply a patch of mine that changes mouse scroll behavior from the top bar from window changing to volume control.
 ![Material Shell](/documentation/on-all-full.svg)
 
 ---

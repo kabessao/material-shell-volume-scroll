@@ -17,11 +17,81 @@ import { ReorderableList } from 'src/widget/reorderableList';
 import * as St from 'st';
 import { layout, main as Main, popupMenu as PopupMenu } from 'ui';
 import { MsWorkspace, Tileable } from '../msWorkspace';
-const DND = imports.ui.dnd;
 import Monitor = layout.Monitor;
+
+const Volume = imports.ui.status.volume;
+const GioVolume = imports.gi.Gio;
 
 /** Extension imports */
 const Me = imports.misc.extensionUtils.getCurrentExtension();
+
+
+const VOL_ICONS = [
+    'audio-volume-muted-symbolic',
+    'audio-volume-low-symbolic',
+    'audio-volume-medium-symbolic',
+    'audio-volume-high-symbolic'
+];
+
+function _getVolumeMax() {
+  let volumeControl = Volume.getMixerControl();
+  return volumeControl.get_vol_max_norm();
+}
+//
+function _onScroll(actor: any, event: any) {
+  let volumeStep = 1000
+  let volumeControl = Volume.getMixerControl();
+  var volume = volumeControl.get_default_sink().volume;
+
+  switch(event.get_scroll_direction()) {
+    case Clutter.ScrollDirection.UP:
+      volume += volumeStep;
+      break;
+    case Clutter.ScrollDirection.DOWN:
+      volume -= volumeStep;
+      break;
+    default:
+      return Clutter.EVENT_PROPAGATE;
+  }
+
+  if (volume > _getVolumeMax()) {
+    volume = _getVolumeMax();
+  }
+  else if (volume < volumeStep) {
+    volume = 0;
+  }
+
+  volumeControl.get_default_sink().volume = volume;
+  volumeControl.get_default_sink().push_volume();
+
+  _showVolumeOsd(volume, volume/_getVolumeMax() * 100);
+
+  return Clutter.EVENT_STOP;
+}
+
+/**
+ * Shows the current volume on OSD.
+ *
+ * @see gsd-media-keys-manager.c
+ */
+function _showVolumeOsd (level: any, percent:any) {
+  let monitor = -1;
+  var n;
+
+  if (level === 0) {
+      n = 0;
+  } else {
+      n = Math.floor(3 * percent / 100 + 1);
+      n = Math.max(1, n);
+      n = Math.min(3, n);
+  }
+
+  let icon = GioVolume.Icon.new_for_string(VOL_ICONS[n]);
+
+  var main: any = Main;
+  main.osdWindowManager.show(monitor, icon, null, parseInt(percent) / 100);
+}
+
 
 const isTileableItem = (obj: any): obj is TileableItem => {
     return obj instanceof TileableItem;
@@ -110,17 +180,18 @@ export class TaskBar extends St.Widget {
             ),
         ];
 
-        this.connect('scroll-event', (_, event) => {
-            switch (event.get_scroll_direction()) {
-                case Clutter.ScrollDirection.UP:
-                    this.msWorkspace.focusPreviousTileable();
-                    break;
-                case Clutter.ScrollDirection.DOWN:
-                    this.msWorkspace.focusNextTileable();
-
-                    break;
-            }
-        });
+          this.connect('scroll-event', _onScroll);
+//         this.connect('scroll-event', (_, event) => {
+//             switch (event.get_scroll_direction()) {
+//                 case Clutter.ScrollDirection.UP:
+//                     this.msWorkspace.focusPreviousTileable();
+//                     break;
+//                 case Clutter.ScrollDirection.DOWN:
+//                     this.msWorkspace.focusNextTileable();
+// 
+//                     break;
+//             }
+//         });
 
         this.tracker = Shell.WindowTracker.get_default();
         this.windowFocused = null;

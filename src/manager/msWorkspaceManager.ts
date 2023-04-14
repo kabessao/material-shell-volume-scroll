@@ -11,8 +11,14 @@ import {
 } from 'src/layout/msWorkspace/msWorkspace';
 import { MsManager } from 'src/manager/msManager';
 import { assert, assertNotNull } from 'src/utils/assert';
+import { Async } from 'src/utils/async';
 import { isNonNull } from 'src/utils/predicates';
 import { getSettings } from 'src/utils/settings';
+import {
+    compareVersions,
+    gnomeVersionNumber,
+    parseVersion,
+} from 'src/utils/shellVersionMatch';
 import { layout, main as Main, windowManager } from 'ui';
 import { MetaWindowWithMsProperties } from './msWindowManager';
 import Monitor = layout.Monitor;
@@ -20,6 +26,8 @@ import Monitor = layout.Monitor;
 /** Extension imports */
 const Me = imports.misc.extensionUtils.getCurrentExtension();
 const WorkspaceTracker = windowManager.WorkspaceTracker;
+const beforeGnome44 =
+    compareVersions(gnomeVersionNumber, parseVersion('44.0')) < 0;
 
 interface MsWorkspaceManagerState {
     msWorkspaceList: MsWorkspaceState[];
@@ -159,7 +167,13 @@ export class MsWorkspaceManager extends MsManager {
 
         // If a _queueCheckWorkspaces is already pending it's will would use the previous _checkWorkspaces method we need to kill it and add a new one
         if (this.workspaceTracker._checkWorkspacesId !== 0) {
-            Meta.later_remove(this.workspaceTracker._checkWorkspacesId);
+            if (beforeGnome44) {
+                Meta.later_remove(this.workspaceTracker._checkWorkspacesId);
+            } else {
+                global.compositor
+                    .get_laters()
+                    .remove(this.workspaceTracker._checkWorkspacesId);
+            }
             this.workspaceTracker._queueCheckWorkspaces();
         }
 
@@ -393,11 +407,11 @@ export class MsWorkspaceManager extends MsManager {
 
             // if there is not external msWorkspace available create one
             if (msWorkspace) {
-                const workspace = assertNotNull(
-                    this.getWorkspaceOfMsWorkspace(msWorkspace)
-                );
                 msWorkspace.setMonitor(externalMonitor);
                 if (!Meta.prefs_get_dynamic_workspaces()) {
+                    const workspace = assertNotNull(
+                        this.getWorkspaceOfMsWorkspace(msWorkspace)
+                    );
                     this.workspaceManager.remove_workspace(
                         workspace,
                         global.get_current_time()
@@ -709,7 +723,11 @@ export class MsWorkspaceManager extends MsManager {
         ) {
             return metaWindow.change_workspace(msWindow.msWorkspace.workspace);
         }
-        this.setWindowToMsWorkspace(msWindow, msWorkspace);
+
+        this.setWindowToMsWorkspaceWithCreationChaosProtection(
+            msWindow,
+            msWorkspace
+        );
     }
 
     windowEnteredMonitor(
@@ -735,7 +753,51 @@ export class MsWorkspaceManager extends MsManager {
         if (!msWorkspace || !metaWindow.msWindow) {
             return;
         }
-        this.setWindowToMsWorkspace(metaWindow.msWindow, msWorkspace);
+        this.setWindowToMsWorkspaceWithCreationChaosProtection(
+            metaWindow.msWindow,
+            msWorkspace
+        );
+    }
+
+    /**
+     * On creation window can jump from monitor to monitor quickly for obscure reason until they stabilize on the correct one
+     * In order to get ride of the visual glitch of this behavior we guard rapid changes
+     */
+    setWindowToMsWorkspaceWithCreationChaosProtection(
+        msWindow: MsWindow,
+        newMsWorkspace: MsWorkspace,
+        insert = false
+    ) {
+        assert(
+            msWindow.metaWindow !== null,
+            'This must be called from an MsWindow with an metaWindow'
+        );
+        assert(
+            msWindow.metaWindow.createdAt !== undefined,
+            "Can't tell when this window was created"
+        );
+        const lifetime =
+            global.display.get_current_time_roundtrip() -
+            msWindow.metaWindow.createdAt;
+
+        if (lifetime < 200) {
+            Async.addTimeout(GLib.PRIORITY_DEFAULT, 200, () => {
+                if (
+                    msWindow.metaWindow != null &&
+                    msWindow.metaWindow.get_monitor() ===
+                        newMsWorkspace.monitor.index
+                ) {
+                    this.setWindowToMsWorkspace(
+                        msWindow,
+                        newMsWorkspace,
+                        insert
+                    );
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+        } else {
+            this.setWindowToMsWorkspace(msWindow, newMsWorkspace, insert);
+        }
     }
 
     setWindowToMsWorkspace(
